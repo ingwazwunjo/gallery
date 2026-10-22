@@ -1,7 +1,8 @@
 -- ArtMatch core schema.
--- Rules this schema relies on (see docs/adr/0001-database-access.md):
---   * Clients may only SELECT (filtered by RLS). Every write goes through a Route Handler
---     that calls a SECURITY DEFINER function, so business rules live in one place.
+-- Rules this schema relies on (see docs/adr/0001-database-access.md and 0002-account-erasure.md):
+--   * Clients may only SELECT (filtered by RLS and column grants). Every write goes through a
+--     Route Handler that calls a SECURITY DEFINER function, so business rules live in one place.
+--   * Accounts are erased by anonymisation, never by deleting rows that history depends on.
 --   * Money is integer THB, columns end in _thb.
 --   * No national ID numbers or ID card images are ever stored (decision D3).
 
@@ -14,10 +15,11 @@ create type public.request_status as enum (
 create type public.swipe_action as enum ('pass', 'like');
 create type public.report_target as enum ('artwork', 'user', 'request');
 create type public.report_status as enum ('open', 'actioned', 'dismissed');
-create type public.verification_method as enum ('phone', 'national_id');
+-- Only phone (SMS OTP) for the MVP. Add a value when an eKYC provider is chosen.
+create type public.verification_method as enum ('phone');
 create type public.verification_status as enum ('pending', 'verified', 'rejected', 'revoked');
 
--- ===== Shared trigger =====
+-- ===== Shared trigger functions =====
 create function public.set_updated_at() returns trigger
 language plpgsql set search_path = '' as $$
 begin
@@ -25,18 +27,29 @@ begin
   return new;
 end $$;
 
+create function public.forbid_mutation() returns trigger
+language plpgsql set search_path = '' as $$
+begin
+  raise exception '% is append-only', tg_table_name using errcode = '42501';
+end $$;
+
 -- ===== Identity =====
+-- No ON DELETE CASCADE from auth.users: deleting a login must go through the erasure flow
+-- (ADR 0002), which anonymises this row instead of removing it.
 create table public.profiles (
-  id                     uuid primary key references auth.users (id) on delete cascade,
+  id                     uuid primary key references auth.users (id),
   display_name           text not null check (char_length(btrim(display_name)) between 1 and 50),
   avatar_path            text,
   -- D1: 18+ only. Age is checked in the onboarding function, not with a CHECK on current_date.
-  birth_date             date not null,
+  birth_date             date,
   terms_accepted_version text not null,
   terms_accepted_at      timestamptz not null default now(),
   is_suspended           boolean not null default false,
+  deleted_at             timestamptz, -- set when the account is anonymised
   created_at             timestamptz not null default now(),
-  updated_at             timestamptz not null default now()
+  updated_at             timestamptz not null default now(),
+  check (deleted_at is not null or birth_date is not null),
+  check (deleted_at is null or (birth_date is null and avatar_path is null))
 );
 
 -- Admins are granted only through a reviewed migration or SQL by the project owner.
@@ -46,7 +59,7 @@ create table public.admins (
 );
 
 create table public.artist_profiles (
-  user_id       uuid primary key references public.profiles (id) on delete cascade,
+  user_id       uuid primary key references public.profiles (id),
   bio           text check (char_length(bio) <= 1000),
   queue_status  public.queue_status not null default 'closed',
   min_price_thb integer check (min_price_thb between 1 and 1000000),
@@ -70,7 +83,8 @@ create table public.artist_verifications (
   user_id      uuid primary key references public.artist_profiles (user_id) on delete cascade,
   method       public.verification_method not null,
   status       public.verification_status not null default 'pending',
-  provider_ref text check (char_length(provider_ref) <= 200), -- eKYC reference, never an ID number
+  -- Opaque reference from a verification provider. Must never hold a national ID number.
+  provider_ref text check (char_length(provider_ref) <= 200 and provider_ref !~ '[0-9]{13}'),
   verified_at  timestamptz,
   reviewed_by  uuid references public.profiles (id),
   created_at   timestamptz not null default now(),
@@ -94,9 +108,11 @@ create table public.styles (
 );
 
 -- ===== Artworks =====
+-- Normally soft-deleted (deleted_at). A hard delete is reserved for illegal content an admin must
+-- purge; it is blocked while the artist still exists only through artist_id (no cascade from artists).
 create table public.artworks (
   id                uuid primary key default gen_random_uuid(),
-  artist_id         uuid not null references public.artist_profiles (user_id) on delete cascade,
+  artist_id         uuid not null references public.artist_profiles (user_id),
   title             text not null check (char_length(btrim(title)) between 1 and 100),
   category_slug     text not null references public.categories (slug),
   price_from_thb    integer not null check (price_from_thb between 1 and 1000000),
@@ -115,7 +131,9 @@ create table public.artworks (
   created_at        timestamptz not null default now(),
   updated_at        timestamptz not null default now(),
   constraint approved_needs_display
-    check (status <> 'approved' or (display_path is not null and published_at is not null))
+    check (status <> 'approved' or (display_path is not null and published_at is not null)),
+  -- Lets commission_requests prove its artwork belongs to its artist.
+  constraint artworks_id_artist_key unique (id, artist_id)
 );
 create index artworks_feed_idx on public.artworks (category_slug, price_from_thb)
   where status = 'approved' and deleted_at is null;
@@ -130,7 +148,7 @@ create table public.artwork_styles (
 
 -- ===== Discovery & analytics =====
 create table public.experiment_assignments (
-  user_id     uuid not null references public.profiles (id) on delete cascade,
+  user_id     uuid not null references public.profiles (id),
   experiment  text not null,
   variant     text not null check (variant in ('swipe', 'gallery')),
   assigned_at timestamptz not null default now(),
@@ -139,7 +157,7 @@ create table public.experiment_assignments (
 
 create table public.feed_impressions (
   id              bigint generated always as identity primary key,
-  user_id         uuid not null references public.profiles (id) on delete cascade,
+  user_id         uuid not null references public.profiles (id),
   artwork_id      uuid not null references public.artworks (id) on delete cascade,
   feed_session_id uuid not null,
   variant         text not null check (variant in ('swipe', 'gallery')),
@@ -151,7 +169,7 @@ create index feed_impressions_artwork_idx on public.feed_impressions (artwork_id
 
 create table public.swipe_events (
   id              bigint generated always as identity primary key,
-  user_id         uuid not null references public.profiles (id) on delete cascade,
+  user_id         uuid not null references public.profiles (id),
   artwork_id      uuid not null references public.artworks (id) on delete cascade,
   feed_session_id uuid not null,
   action          public.swipe_action not null,
@@ -161,7 +179,7 @@ create table public.swipe_events (
 create index swipe_events_user_idx on public.swipe_events (user_id, created_at desc);
 
 create table public.saved_artworks (
-  user_id    uuid not null references public.profiles (id) on delete cascade,
+  user_id    uuid not null references public.profiles (id),
   artwork_id uuid not null references public.artworks (id) on delete cascade,
   created_at timestamptz not null default now(),
   primary key (user_id, artwork_id)
@@ -169,7 +187,7 @@ create table public.saved_artworks (
 
 create table public.analytics_events (
   id         bigint generated always as identity primary key,
-  user_id    uuid references public.profiles (id) on delete set null,
+  user_id    uuid references public.profiles (id),
   name       text not null check (name in (
                'artist_profile_view', 'artwork_detail_view', 'request_form_open', 'filter_change')),
   props      jsonb not null default '{}' check (pg_column_size(props) < 2048),
@@ -182,7 +200,7 @@ create table public.commission_requests (
   id                      uuid primary key default gen_random_uuid(),
   buyer_id                uuid not null references public.profiles (id),
   artist_id               uuid not null references public.artist_profiles (user_id),
-  artwork_id              uuid references public.artworks (id) on delete set null,
+  artwork_id              uuid,
   category_slug           text not null references public.categories (slug),
   description             text not null check (char_length(btrim(description)) between 20 and 4000),
   buyer_budget_thb        integer not null check (buyer_budget_thb between 1 and 1000000),
@@ -191,13 +209,19 @@ create table public.commission_requests (
   agreed_price_thb        integer check (agreed_price_thb between 1 and 1000000),
   commercial_use          boolean not null default false,
   status                  public.request_status not null default 'submitted',
-  version                 integer not null default 1,
+  version                 integer not null default 1 check (version >= 1),
   status_changed_at       timestamptz not null default now(),
   created_at              timestamptz not null default now(),
   updated_at              timestamptz not null default now(),
+  -- The artwork that inspired the request must belong to the artist being asked.
+  -- If an admin purges that artwork, only artwork_id is cleared (PG 15+ column list).
+  constraint commission_requests_artwork_fk foreign key (artwork_id, artist_id)
+    references public.artworks (id, artist_id) on delete set null (artwork_id),
   check (buyer_id <> artist_id),
   check (status <> 'quoted' or quoted_price_thb is not null),
-  check (status not in ('confirmed', 'delivered', 'completed') or agreed_price_thb is not null)
+  check (status not in ('confirmed', 'delivered', 'completed')
+         or (quoted_price_thb is not null and agreed_price_thb is not null)),
+  check (status_changed_at >= created_at)
 );
 -- Anti-spam: one open request per buyer-artist pair.
 create unique index one_open_request_per_pair on public.commission_requests (buyer_id, artist_id)
@@ -205,10 +229,10 @@ create unique index one_open_request_per_pair on public.commission_requests (buy
 create index requests_artist_idx on public.commission_requests (artist_id, status, created_at desc);
 create index requests_buyer_idx on public.commission_requests (buyer_id, status, created_at desc);
 
--- Append-only history of every status change.
+-- Append-only history of every status change. Requests with history can never be deleted.
 create table public.request_events (
   id          bigint generated always as identity primary key,
-  request_id  uuid not null references public.commission_requests (id) on delete cascade,
+  request_id  uuid not null references public.commission_requests (id),
   actor_id    uuid references public.profiles (id), -- null = system (expiry job)
   from_status public.request_status,
   to_status   public.request_status not null,
@@ -262,14 +286,14 @@ create trigger artworks_updated_at before update on public.artworks
 create trigger commission_requests_updated_at before update on public.commission_requests
   for each row execute function public.set_updated_at();
 
--- ===== Append-only enforcement (also blocks the service role and table owner) =====
-create function public.forbid_mutation() returns trigger
-language plpgsql set search_path = '' as $$
-begin
-  raise exception '% is append-only', tg_table_name using errcode = '42501';
-end $$;
-
+-- ===== Append-only enforcement =====
+-- Row triggers stop UPDATE/DELETE; statement triggers stop TRUNCATE (row triggers do not fire on it).
+-- They apply to every role, including the service role and the table owner.
 create trigger request_events_append_only before update or delete on public.request_events
   for each row execute function public.forbid_mutation();
+create trigger request_events_no_truncate before truncate on public.request_events
+  for each statement execute function public.forbid_mutation();
 create trigger admin_audit_log_append_only before update or delete on public.admin_audit_log
   for each row execute function public.forbid_mutation();
+create trigger admin_audit_log_no_truncate before truncate on public.admin_audit_log
+  for each statement execute function public.forbid_mutation();

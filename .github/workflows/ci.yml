@@ -12,14 +12,16 @@ concurrency:
 permissions:
   contents: read
 
+# Third-party actions are pinned to full commit SHAs (tag in the comment) so a moved tag cannot
+# change what runs. The Supabase CLI comes from package-lock.json, the same version as local dev.
 jobs:
   app:
     name: Lint, typecheck, unit tests, build
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
@@ -35,10 +37,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: supabase/setup-cli@v1
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          version: latest
+          node-version: 22
+          cache: npm
+      - run: npm ci
       # Starts only Postgres, applies every migration from an empty database, then runs seed.sql.
-      - run: supabase db start
-      - run: supabase test db
+      - run: npx supabase db start
+      - run: npx supabase test db

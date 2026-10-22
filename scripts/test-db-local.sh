@@ -2,6 +2,8 @@
 # Run migrations + seed + pgTAP tests against a throwaway plain Postgres, without Docker.
 # Prefer `npm run db:test` (real Supabase via Docker). Use this only when Docker is unavailable.
 # Requires: Postgres binaries (initdb, pg_ctl), the pgtap extension and pg_prove on this machine.
+# Supabase runs Postgres 17 (supabase/config.toml). Use 17 locally when available; an older major
+# version can differ in default privileges, so CI's real `supabase test db` is authoritative.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

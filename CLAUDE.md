@@ -9,9 +9,16 @@ to Thai artists. Stack: Next.js (App Router) + TypeScript, Supabase (Postgres, A
 
 - **RLS first.** Clients only read. Every write = Route Handler → `SECURITY DEFINER` function.
   See `docs/adr/0001-database-access.md`.
-- Every new function in `public`: `set search_path = ''`, `revoke execute ... from public`,
-  then grant only what clients need.
-- Never select `*` from `profiles` in client-facing code (column grants will reject it).
+- Clients start with no privileges. A new table clients may read needs an explicit `grant select`
+  (list columns if any are private) plus a policy, and an update to the allow-lists in
+  `supabase/tests/00_privileges.test.sql`.
+- Every new function: `set search_path = ''`, `revoke execute ... from public`, then grant only what
+  clients need. Helpers used inside policies go in schema `private`, never `public`.
+- Every view in `public` must be `with (security_invoker = true)`.
+- Never `select *` in client-facing code; `profiles`, `artworks`, `reports` and
+  `artist_verifications` have column grants that reject it.
+- Never hard-delete rows that history depends on; accounts are erased by anonymisation
+  (`docs/adr/0002-account-erasure.md`).
 - Ship each feature with its migration, Zod schema, authorization and tests in the same change.
 - Never edit an applied migration; add a new one.
 - Never claim tests pass without running them.
