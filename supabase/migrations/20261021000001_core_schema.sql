@@ -83,8 +83,9 @@ create table public.artist_verifications (
   user_id      uuid primary key references public.artist_profiles (user_id) on delete cascade,
   method       public.verification_method not null,
   status       public.verification_status not null default 'pending',
-  -- Opaque reference from a verification provider. Must never hold a national ID number.
-  provider_ref text check (char_length(provider_ref) <= 200 and provider_ref !~ '[0-9]{13}'),
+  -- Opaque reference from a verification provider. Must never hold a national ID number, in any
+  -- common spelling: 13 digits, optionally separated by spaces, dots or dashes.
+  provider_ref text check (char_length(provider_ref) <= 200 and provider_ref !~ '[0-9]([ .-]?[0-9]){12}'),
   verified_at  timestamptz,
   reviewed_by  uuid references public.profiles (id),
   created_at   timestamptz not null default now(),
@@ -233,11 +234,14 @@ create index requests_buyer_idx on public.commission_requests (buyer_id, status,
 create table public.request_events (
   id          bigint generated always as identity primary key,
   request_id  uuid not null references public.commission_requests (id),
-  actor_id    uuid references public.profiles (id), -- null = system (expiry job)
+  actor_id    uuid references public.profiles (id), -- null = system; never shown to clients
+  -- What the parties see instead of actor_id, so an admin's identity is never revealed.
+  actor_role  text not null check (actor_role in ('buyer', 'artist', 'admin', 'system')),
   from_status public.request_status,
   to_status   public.request_status not null,
   note        text check (char_length(note) <= 1000),
-  created_at  timestamptz not null default now()
+  created_at  timestamptz not null default now(),
+  check ((actor_role = 'system') = (actor_id is null))
 );
 create index request_events_req_idx on public.request_events (request_id, created_at);
 
@@ -297,3 +301,15 @@ create trigger admin_audit_log_append_only before update or delete on public.adm
   for each row execute function public.forbid_mutation();
 create trigger admin_audit_log_no_truncate before truncate on public.admin_audit_log
   for each statement execute function public.forbid_mutation();
+
+-- Reports are evidence (ADR 0002): their status can change, but they can never be removed.
+create function public.forbid_delete() returns trigger
+language plpgsql set search_path = '' as $$
+begin
+  raise exception 'rows in % cannot be deleted', tg_table_name using errcode = '42501';
+end $$;
+
+create trigger reports_no_delete before delete on public.reports
+  for each row execute function public.forbid_delete();
+create trigger reports_no_truncate before truncate on public.reports
+  for each statement execute function public.forbid_delete();

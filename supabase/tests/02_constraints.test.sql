@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(21);
+select plan(29);
 
 insert into auth.users (id, email) values
   ('f1000000-0000-4000-a000-000000000001', 'c1@t.test'),
@@ -41,6 +41,12 @@ select throws_ok($$insert into artist_verifications (user_id, method, status)
 select throws_ok($$insert into artist_verifications (user_id, method, provider_ref)
   values ('f1000000-0000-4000-a000-000000000002', 'phone', 'id-1101700203451')$$,
   '23514', null, 'a 13-digit national ID number cannot be stored as a provider reference');
+select throws_ok($$insert into artist_verifications (user_id, method, provider_ref)
+  values ('f1000000-0000-4000-a000-000000000002', 'phone', '1-1017-00203-45-1')$$,
+  '23514', null, 'nor with dashes');
+select throws_ok($$insert into artist_verifications (user_id, method, provider_ref)
+  values ('f1000000-0000-4000-a000-000000000002', 'phone', '1 1017 00203 45 1')$$,
+  '23514', null, 'nor with spaces');
 select throws_ok($$insert into artist_verifications (user_id, method)
   values ('f1000000-0000-4000-a000-000000000002', 'national_id')$$,
   '22P02', null, 'national ID is not a verification method in the MVP');
@@ -75,8 +81,15 @@ select throws_ok($$insert into commission_requests (buyer_id, artist_id, categor
   '23505', null, 'only one open request per buyer and artist');
 
 -- ---------- append-only history ----------
-insert into request_events (request_id, actor_id, to_status)
-  values ('f1000000-0000-4000-c000-000000000001', 'f1000000-0000-4000-a000-000000000001', 'submitted');
+insert into request_events (request_id, actor_id, actor_role, to_status)
+  values ('f1000000-0000-4000-c000-000000000001', 'f1000000-0000-4000-a000-000000000001', 'buyer', 'submitted');
+insert into reports (id, reporter_id, target_type, target_id, reason)
+  values ('f1000000-0000-4000-d000-000000000001', 'f1000000-0000-4000-a000-000000000001', 'artwork',
+          'f1000000-0000-4000-b000-000000000003', 'stolen_art');
+
+select throws_ok($$insert into request_events (request_id, actor_id, actor_role, to_status)
+  values ('f1000000-0000-4000-c000-000000000001', 'f1000000-0000-4000-a000-000000000001', 'system', 'expired')$$,
+  '23514', null, 'a system event has no actor, and a person''s event always has one');
 insert into admin_audit_log (admin_id, action, target_type, target_id)
   values ('f1000000-0000-4000-a000-000000000001', 'test', 'artwork', 'f1000000-0000-4000-b000-000000000002');
 
@@ -85,14 +98,23 @@ select throws_ok($$update request_events set note = 'edited'$$, '42501', null,
 select throws_ok($$truncate request_events$$, '42501', null, 'request history cannot be truncated');
 select throws_ok($$update admin_audit_log set reason = 'edited'$$, '42501', null, 'audit log cannot be edited');
 select throws_ok($$truncate admin_audit_log$$, '42501', null, 'audit log cannot be truncated');
+select lives_ok($$update reports set status = 'actioned' where id = 'f1000000-0000-4000-d000-000000000001'$$,
+  'a report''s status can change');
+select throws_ok($$delete from reports where id = 'f1000000-0000-4000-d000-000000000001'$$, '42501', null,
+  'a report (evidence) cannot be deleted');
+select throws_ok($$truncate reports$$, '42501', null, 'reports cannot be truncated');
 
 -- ---------- deletion keeps history and evidence (ADR 0002) ----------
 select throws_ok($$delete from commission_requests where id = 'f1000000-0000-4000-c000-000000000001'$$,
   '23503', null, 'a request with history cannot be deleted');
 select throws_ok($$delete from auth.users where id = 'f1000000-0000-4000-a000-000000000001'$$,
   '23503', null, 'deleting a login does not silently delete its profile; erasure anonymises instead');
-select throws_ok($$delete from profiles where id = 'f1000000-0000-4000-a000-000000000002'$$,
-  '23503', null, 'an artist with artworks or requests cannot be hard-deleted (evidence for reports survives)');
+select throws_ok($$delete from artist_profiles where user_id = 'f1000000-0000-4000-a000-000000000003'$$,
+  '23503', null, 'an artist with artworks cannot be hard-deleted (evidence for reports survives)');
+select lives_ok($$delete from artworks where id = 'f1000000-0000-4000-b000-000000000002'$$,
+  'an admin can still purge an illegal artwork');
+select is((select artwork_id from commission_requests where id = 'f1000000-0000-4000-c000-000000000001'), null,
+  'purging an artwork keeps the request and clears only artwork_id');
 
 select * from finish();
 rollback;

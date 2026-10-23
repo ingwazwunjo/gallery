@@ -15,12 +15,16 @@ security alone is not enough either: it filters rows, not columns.
 1. Every table in `public` has RLS enabled.
 2. Clients start with **no** privileges in `public`: the RLS migration revokes everything and changes
    the default privileges so later tables, views, sequences and functions also start with none.
+   `auto_expose_new_tables = false` in `supabase/config.toml` does the same for the local stack; the
+   hosted project must have the matching setting turned off before launch.
 3. A table clients may read gets an explicit `grant select`, **listing columns** when some are private
    (`profiles`, `artworks`, `reports`, `artist_verifications`), plus a policy choosing the rows.
 4. Every write goes Route Handler → `SECURITY DEFINER` function in `public`, which checks `auth.uid()`,
    the business rule, and writes history/audit rows in the same transaction.
-5. Helpers used inside policies (`is_admin`, `artist_is_publishable`) live in schema `private`, which
-   PostgREST does not expose, so they cannot be probed as RPC endpoints.
+5. Helpers used inside policies live in schema `private`, which PostgREST does not expose, so they
+   cannot be probed as RPC endpoints. Policies call them as `column in (select private.<set>())`:
+   uncorrelated, so each runs once per query. A correlated subquery per row made one unfiltered read
+   of `profiles` take 85 s on 50k users; `supabase/tests/03_policy_performance.test.sql` guards this.
 6. Every function sets `search_path = ''` and revokes execute from `public` explicitly (Postgres grants
    it to PUBLIC by a global default a schema-scoped revoke cannot remove).
 7. Every view in `public` must be `security_invoker = true`, otherwise it runs with its owner's rights
@@ -31,8 +35,9 @@ security alone is not enough either: it filters rows, not columns.
    and statement triggers (TRUNCATE) that apply to every role.
 
 `supabase/tests/00_privileges.test.sql` checks rules 1, 2, 3, 5, 6 and 7 with `has_*_privilege`, so a
-grant made to PUBLIC is caught too, and fails CI if a migration breaks them. Adding a readable table,
-an exposed column or a client-callable function means updating its allow-list on purpose.
+grant made to PUBLIC is caught too, and fails CI if a migration breaks them. It holds a full snapshot
+of every column each client role can read: adding a readable table, an exposed column (including a
+new column on an already-readable table) or a client-callable function means updating it on purpose.
 
 ## Consequences
 
