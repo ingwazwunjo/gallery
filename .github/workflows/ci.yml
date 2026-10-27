@@ -44,5 +44,12 @@ jobs:
           cache: npm
       - run: npm ci
       # Starts only Postgres, applies every migration from an empty database, then runs seed.sql.
+      # config.toml enables Google sign-in; placeholders keep config validation happy in CI.
       - run: npx supabase db start
+        env:
+          SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_ID: ci-placeholder
+          SUPABASE_AUTH_EXTERNAL_GOOGLE_SECRET: ci-placeholder
       - run: npx supabase test db
+        env:
+          SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_ID: ci-placeholder
+          SUPABASE_AUTH_EXTERNAL_GOOGLE_SECRET: ci-placeholder

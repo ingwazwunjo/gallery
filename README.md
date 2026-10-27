@@ -14,6 +14,12 @@ npm run db:reset            # สร้างฐานข้อมูลให�
 npm run dev
 ```
 
+### เข้าสู่ระบบ (B6)
+
+- **Email OTP:** กรอกอีเมลที่ `/login` แล้วกรอกรหัส 6 หลักจากอีเมล บนเครื่องพัฒนาอีเมลไปที่ Mailpit (URL จาก `npx supabase status`)
+- **Google:** ใส่ `SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_ID` และ `SUPABASE_AUTH_EXTERNAL_GOOGLE_SECRET` ใน shell ก่อน `npx supabase start` และใน Google Cloud ต้องมี redirect URI `http://127.0.0.1:54321/auth/v1/callback`
+- **Supabase project จริง:** ตั้งค่าใน dashboard ให้ตรงกับ `supabase/config.toml` (Site URL, Redirect URLs, OTP 6 หลัก หมดอายุ 600 วินาที, template อีเมลจาก `supabase/templates/otp.html`, Google provider)
+
 ผู้ใช้ทดสอบจาก `supabase/seed.sql` (login ด้วย email OTP แล้วเปิดอีเมลใน Mailpit ที่ `npx supabase status` แสดง):
 `buyer@` · `artist@` · `artist2@` · `unverified@` · `admin@` · `suspended@` ตามด้วย `artmatch.test`
 
