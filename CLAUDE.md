@@ -19,6 +19,13 @@ to Thai artists. Stack: Next.js (App Router) + TypeScript, Supabase (Postgres, A
   `artist_verifications` have column grants that reject it.
 - Never hard-delete rows that history depends on; accounts are erased by anonymisation
   (`docs/adr/0002-account-erasure.md`).
+- **Identity on the server comes only from `getAuthContext()` / `requireAuth()`**
+  (`src/server/auth/context.ts`), which verifies the token with `getClaims()`. Never trust
+  `getSession()` or a user id sent in a request body. `src/proxy.ts` only refreshes the session.
+- Any redirect target taken from the URL goes through `safeNextPath()`. State-changing routes
+  that rely on cookies are POST-only and check `isSameOriginRequest()`.
+- API errors use `ApiError` / `errorResponse()` (`src/server/http/errors.ts`): stable code + Thai
+  message, never a raw error message.
 - Ship each feature with its migration, Zod schema, authorization and tests in the same change.
 - Never edit an applied migration; add a new one.
 - Never claim tests pass without running them.
