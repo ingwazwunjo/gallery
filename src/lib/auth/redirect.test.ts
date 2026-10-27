@@ -21,6 +21,11 @@ describe("safeNextPath", () => {
     ["\\\\evil.example"],
     ["/%2F%2Fevil.example"],
     ["/%5Cevil.example"],
+    ["/.//evil.example"],
+    ["/a/..//evil.example"],
+    ["/%2e%2e//evil.example"],
+    ["/%252F%252Fevil.example/../..//x"],
+    ["/\tevil"],
     ["/%2Fevil.example"],
     ["/%6Cogin"],
     ["/LOGIN"],
@@ -44,4 +49,13 @@ describe("safeNextPath", () => {
   it("honours a custom fallback", () => {
     expect(safeNextPath("//evil", "/")).toBe("/");
   });
+
+  it.each(["/\u2215\u2215evil.example", "/\uff0f\uff0fevil.example", "/\u2044evil.example"])(
+    "keeps look-alike slash %j on our site (percent-encoded, not a real slash)",
+    (input) => {
+      const out = safeNextPath(input);
+      expect(new URL(out, "https://artmatch.app").origin).toBe("https://artmatch.app");
+      expect(out.startsWith("//")).toBe(false);
+    },
+  );
 });

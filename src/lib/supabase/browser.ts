@@ -2,6 +2,7 @@
 
 import { createBrowserClient } from "@supabase/ssr";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { authCookieOptions } from "./cookie-options";
 import { publicSupabaseEnv } from "./public-env";
 
 let client: SupabaseClient | undefined;
@@ -10,7 +11,7 @@ let client: SupabaseClient | undefined;
 export function browserSupabase(): SupabaseClient {
   if (!client) {
     const { url, publishableKey } = publicSupabaseEnv();
-    client = createBrowserClient(url, publishableKey);
+    client = createBrowserClient(url, publishableKey, { cookieOptions: authCookieOptions });
   }
   return client;
 }

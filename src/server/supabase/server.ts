@@ -2,6 +2,8 @@ import "server-only";
 import { createServerClient } from "@supabase/ssr";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
+import { connection } from "next/server";
+import { authCookieOptions } from "@/lib/supabase/cookie-options";
 import { publicSupabaseEnv } from "@/lib/supabase/public-env";
 
 /**
@@ -9,11 +11,14 @@ import { publicSupabaseEnv } from "@/lib/supabase/public-env";
  * Create a new one per request; never share it between requests.
  */
 export async function serverSupabase(): Promise<SupabaseClient> {
-  // Read cookies first: it marks the caller as request-time, so prerendering stops here
-  // instead of failing on missing configuration at build time.
+  // Request-time only: connection() and cookies() stop prerendering here, so the client's
+  // background session work (which reads the clock) never runs during a prerender, and missing
+  // configuration does not fail the build.
+  await connection();
   const cookieStore = await cookies();
   const { url, publishableKey } = publicSupabaseEnv();
   return createServerClient(url, publishableKey, {
+    cookieOptions: authCookieOptions,
     cookies: {
       getAll: () => cookieStore.getAll(),
       setAll: (toSet) => {

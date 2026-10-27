@@ -50,3 +50,12 @@ to Thai artists. Stack: Next.js (App Router) + TypeScript, Supabase (Postgres, A
 | Local Supabase (Docker)       | `npx supabase start` · `npm run db:reset`                             |
 | Database tests (Docker)       | `npm run db:test`                                                     |
 | Database tests without Docker | `npm run db:test:local` (plain Postgres + pgTAP; CI is authoritative) |
+
+## Auth notes (B6)
+
+- Access tokens are verified locally (`getClaims`), so a sign-out, ban or erasure takes effect for an
+  already-issued token only when it expires (`jwt_expiry`, 1 hour). Anything that must stop at once
+  (suspension, erasure) is also enforced inside the database functions, not only at login.
+- Before beta: CAPTCHA on the login form (`[auth.captcha]` + `captchaToken`) and a custom SMTP
+  provider. Without them anyone can drain the email quota, and Supabase's built-in email only reaches
+  the project team's own addresses.

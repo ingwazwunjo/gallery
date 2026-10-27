@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { authCookieOptions, isAuthCookieName } from "@/lib/supabase/cookie-options";
 import { publicSupabaseEnv } from "@/lib/supabase/public-env";
 
 /**
@@ -15,6 +16,7 @@ export async function proxy(request: NextRequest) {
   const { url, publishableKey } = publicSupabaseEnv();
 
   const supabase = createServerClient(url, publishableKey, {
+    cookieOptions: authCookieOptions,
     cookies: {
       getAll: () => request.cookies.getAll(),
       setAll: (toSet, headers) => {
@@ -28,8 +30,23 @@ export async function proxy(request: NextRequest) {
   });
 
   // Do not put code between client creation and this call: it is what triggers the refresh.
-  await supabase.auth.getClaims();
+  try {
+    await supabase.auth.getClaims();
+  } catch {
+    // A malformed session cookie (e.g. planted by a sibling subdomain) can make getClaims throw.
+    // Drop it so the user is simply signed out instead of every page failing with a 500.
+    return withoutAuthCookies(request);
+  }
 
+  return response;
+}
+
+function withoutAuthCookies(request: NextRequest) {
+  const stale = request.cookies.getAll().filter((c) => isAuthCookieName(c.name));
+  stale.forEach((c) => request.cookies.delete(c.name));
+  const response = NextResponse.next({ request });
+  stale.forEach((c) => response.cookies.set(c.name, "", { ...authCookieOptions, maxAge: 0 }));
+  response.headers.set("Cache-Control", "private, no-cache, no-store, must-revalidate, max-age=0");
   return response;
 }
 
